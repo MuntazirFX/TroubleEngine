@@ -1,0 +1,83 @@
+name: iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ios-ipa.yml"
+
+jobs:
+  ipa:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout TroubleEngine
+        uses: actions/checkout@v4
+
+      - name: Checkout Santa-ios (Metal app + xmas.xpk)
+        uses: actions/checkout@v4
+        with:
+          repository: MuntazirFX/Santa-ios
+          path: santa-ios
+
+      - name: Generate build info
+        working-directory: santa-ios
+        run: |
+          echo "#pragma once" > ios/BuildInfo.h
+          echo "#define SANTA_BUILD_SHA \"${GITHUB_SHA:0:7}\"" >> ios/BuildInfo.h
+          echo "#define SANTA_BUILD_TIME \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >> ios/BuildInfo.h
+
+      - name: Check xmas.xpk
+        working-directory: santa-ios
+        run: test -f assets/xmas.xpk && ls -lh assets/xmas.xpk
+
+      - name: Metal toolchain
+        continue-on-error: true
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: santa-ios
+        run: |
+          rm -rf SantaEngine.xcodeproj
+          xcodegen generate
+          test -d SantaEngine.xcodeproj
+
+      - name: Build unsigned iOS app
+        working-directory: santa-ios
+        run: |
+          set -eo pipefail
+          xcodebuild \
+            -project SantaEngine.xcodeproj \
+            -scheme SantaEngine \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ONLY_ACTIVE_ARCH=NO
+
+      - name: Package TroubleEngine.ipa
+        working-directory: santa-ios
+        run: |
+          set -e
+          APP_PATH="$(find build -type d -name SantaEngine.app | head -n 1)"
+          test -n "$APP_PATH"
+          cp assets/xmas.xpk "$APP_PATH/xmas.xpk"
+          rm -rf Payload TroubleEngine.ipa
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/SantaEngine.app
+          ditto -c -k --sequesterRsrc --keepParent Payload TroubleEngine.ipa
+          ls -lh TroubleEngine.ipa
+          unzip -l TroubleEngine.ipa | head
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: TroubleEngine-ipa
+          path: santa-ios/TroubleEngine.ipa
+          retention-days: 14
